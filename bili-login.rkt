@@ -4,6 +4,7 @@
 (require racket/future racket/draw racket/place)
 (require json pict)
 (require simple-qr)
+(require "bili-utils.rkt")
 
 
 ;; URL Constants
@@ -15,12 +16,6 @@
 
 (define str-qrlogin-info
   "https://passport.bilibili.com/qrcode/getLoginInfo")
-
-;;; fonction auxiliaire
-
-;; GET
-(define (str/get->json str-url)
-  (read-json (get-pure-port (string->url str-url))))
 
 ;; POST
 (define (str/post->header+json str-url params)
@@ -92,9 +87,10 @@
 (let ([login-infos (initial-login)])
   (with-output-to-file "cookies.txt"
     (lambda ()
-      (write (extract-cookies
-              (car login-infos)
-              (string->url str-qrlogin-info))))
+      (extract-and-save-cookies!
+       (car login-infos)
+       (string->url str-qrlogin-info))
+      (write (cookie-header (string->url str-qrlogin-info))))
     #:mode 'binary
     #:exists 'truncate))
 
