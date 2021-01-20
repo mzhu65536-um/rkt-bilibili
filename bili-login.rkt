@@ -1,7 +1,7 @@
 #lang racket/gui
 
 (require net/url net/cookies net/uri-codec)
-(require racket/future racket/draw)
+(require racket/future racket/draw racket/place)
 (require json pict)
 (require simple-qr)
 
@@ -11,10 +11,10 @@
   "https://passport.bilibili.com/login?act=getkey")
 
 (define str-qrlogin-init
-  "http://passport.bilibili.com/qrcode/getLoginUrl")
+  "https://passport.bilibili.com/qrcode/getLoginUrl")
 
 (define str-qrlogin-info
-  "http://passport.bilibili.com/qrcode/getLoginInfo")
+  "https://passport.bilibili.com/qrcode/getLoginInfo")
 
 ;;; fonction auxiliaire
 
@@ -23,19 +23,20 @@
   (read-json (get-pure-port (string->url str-url))))
 
 ;; POST
-(define (str/post->json str-url params)
+(define (str/post->header+json str-url params)
   (let-values
-      ([(_ __ p)
+      ([(_ header res)
         (http-sendrecv/url
          (string->url str-url)
          #:method #"POST"
          #:data (alist->form-urlencoded params)
          #:headers (list "Content-Type: application/x-www-form-urlencoded"))])
-    (read-json p)))
+    (cons header
+          (read-json res))))
 
 
 (define (check-login-info oauth)
-  (str/post->json
+  (str/post->header+json
    str-qrlogin-info
    `((oauthKey . ,oauth))))
 
@@ -63,25 +64,37 @@
 
 
 ;; Authentication Helper 
-(define (auth-succeed? j)
-  (hash? (hash-ref j 'data)))
+(define (auth-succeed? h+j)
+  (hash? (hash-ref (cdr h+j) 'data)))
 
 (define (check-sleep t a)
-  (sleep t)
+  (sleep/yield t)
   (check-login-info a))
 
-;; Main Program
-(define (main)
+;; Main Program (FIXME : CONCURRENCY)
+(define (initial-login)
   (let* ([res-init (str/get->json str-qrlogin-init)] ; GET
          [auth-url (json/qrlogin-url res-init)]      ; extract url
          [auth-oauth (json/qrlogin-oauth res-init)]
+         [qr-img (qr-write auth-url "qr-auth.png")]
          )     
-    (begin 
-      (qr-write auth-url "qr-auth.png")
-      (thread (lambda () (display-img/frame "qr-auth.png" "Login QR Display")))
-      (thread ;; TODO : replace with future and logger
-       (lambda ()
-         (diverge-until (lambda () (check-sleep 2 auth-oauth))
-                        auth-succeed?))))))
+    (let ([th-img
+           (thread (lambda ()
+                     (display-img/frame "qr-auth.png" "Login QR Display")))]
+          [th-verify
+           (future ;; TODO : replace with future and logger
+            (lambda ()
+              (diverge-until (lambda () (check-sleep 2 auth-oauth))
+                             auth-succeed?)))])
+      (let ([ret (touch th-verify)]) (kill-thread th-img) ret))))
 
-#;(define final (main))
+;; Extract the Cookies based on login informations
+(let ([login-infos (initial-login)])
+  (with-output-to-file "cookies.txt"
+    (lambda ()
+      (write (extract-cookies
+              (car login-infos)
+              (string->url str-qrlogin-info))))
+    #:mode 'binary
+    #:exists 'truncate))
+
